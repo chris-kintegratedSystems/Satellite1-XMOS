@@ -51,8 +51,13 @@ typedef struct {
     int   t_near_now;   /* latest lc_t_near (>0 => near/double-talk detected) */
     float ref_pow_max;  /* max aec_ref_power over the window (far-end energy the AEC saw) */
     float ref_pow_now;  /* latest aec_ref_power */
+    /* [LC-TELE dev.204] near-power + corr-dip visibility, to set the dev.205 onset-double-talk lever. */
+    float corr_min;     /* MIN lc_corr_val over the window (the onset corr-dip depth) */
+    float near_pow_max; /* MAX lc_near_power_est over the window (onset near-power spike) */
+    float near_pow_now; /* latest lc_near_power_est */
+    float near_bg_now;  /* latest lc_near_bg_power_est (the baseline; bar = lc_near_delta_far_active*this) */
 } lc_tele_t;
-static lc_tele_t lc_tele = { 1.0f, 1.0f, 0.0f, 0, 0, 0.0f, 0.0f };
+static lc_tele_t lc_tele = { 1.0f, 1.0f, 0.0f, 0, 0, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f };
 
 static void *audio_pipeline_input_i(void *input_app_data)
 {
@@ -154,13 +159,19 @@ static void stage_agc(frame_data_t *frame_data)
         float g  = float_s32_to_float(agc_stage_state.state.lc_gain);
         float cr = float_s32_to_float(agc_stage_state.state.lc_corr_val);
         float rp = float_s32_to_float(agc_stage_state.md.aec_ref_power);
+        float np = float_s32_to_float(agc_stage_state.state.lc_near_power_est);
+        float nb = float_s32_to_float(agc_stage_state.state.lc_near_bg_power_est);
         if (g < lc_tele.gain_min) { lc_tele.gain_min = g; }
         lc_tele.gain_now = g;
         lc_tele.corr_now = cr;
+        if (cr < lc_tele.corr_min) { lc_tele.corr_min = cr; }   /* [dev.204] onset corr-dip depth */
         if (agc_stage_state.state.lc_t_far > lc_tele.t_far_max) { lc_tele.t_far_max = agc_stage_state.state.lc_t_far; }
         lc_tele.t_near_now = agc_stage_state.state.lc_t_near;
         if (rp > lc_tele.ref_pow_max) { lc_tele.ref_pow_max = rp; }
         lc_tele.ref_pow_now = rp;
+        if (np > lc_tele.near_pow_max) { lc_tele.near_pow_max = np; }  /* [dev.204] */
+        lc_tele.near_pow_now = np;
+        lc_tele.near_bg_now  = nb;
     }
 #endif
 }
@@ -176,6 +187,10 @@ void audio_pipeline_get_lc_telemetry(uint8_t *buf)
     uint16_t t_near_now     = (uint16_t)(lc_tele.t_near_now);
     float    ref_pow_max    = lc_tele.ref_pow_max;
     float    ref_pow_now    = lc_tele.ref_pow_now;
+    uint16_t corr_min_milli = (uint16_t)(lc_tele.corr_min * 1000.0f + 0.5f);  /* [dev.204] */
+    float    near_pow_max   = lc_tele.near_pow_max;
+    float    near_pow_now   = lc_tele.near_pow_now;
+    float    near_bg_now    = lc_tele.near_bg_now;
 
     buf[0]  = (uint8_t)(gain_min_milli & 0xFF); buf[1]  = (uint8_t)(gain_min_milli >> 8);
     buf[2]  = (uint8_t)(gain_now_milli & 0xFF); buf[3]  = (uint8_t)(gain_now_milli >> 8);
@@ -184,11 +199,18 @@ void audio_pipeline_get_lc_telemetry(uint8_t *buf)
     buf[8]  = (uint8_t)(t_near_now & 0xFF);     buf[9]  = (uint8_t)(t_near_now >> 8);
     memcpy(&buf[10], &ref_pow_max, sizeof(float));
     memcpy(&buf[14], &ref_pow_now, sizeof(float));
+    /* [dev.204] near-power + onset corr-dip visibility (bytes 18..31) */
+    buf[18] = (uint8_t)(corr_min_milli & 0xFF); buf[19] = (uint8_t)(corr_min_milli >> 8);
+    memcpy(&buf[20], &near_pow_max, sizeof(float));
+    memcpy(&buf[24], &near_pow_now, sizeof(float));
+    memcpy(&buf[28], &near_bg_now,  sizeof(float));
 
     /* read-and-clear the peak-hold for the next window */
-    lc_tele.gain_min    = 1.0f;
-    lc_tele.t_far_max   = 0;
-    lc_tele.ref_pow_max = 0.0f;
+    lc_tele.gain_min     = 1.0f;
+    lc_tele.t_far_max    = 0;
+    lc_tele.ref_pow_max  = 0.0f;
+    lc_tele.corr_min     = 1.0f;   /* [dev.204] */
+    lc_tele.near_pow_max = 0.0f;   /* [dev.204] */
 }
 
 static void initialize_pipeline_stages(void)

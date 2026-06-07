@@ -39,6 +39,21 @@ static vnr_pred_stage_ctx_t DWORD_ALIGNED vnr_pred_stage_state = {};
 static ns_stage_ctx_t DWORD_ALIGNED ns_stage_state = {};
 static agc_stage_ctx_t DWORD_ALIGNED agc_stage_state = {};
 
+/* [LC-TELE dev.203] Per-window peak-hold of the AGC loss-control internal state, for off-chip readout
+ * via the DFU servicer GET_LC_STATE command. Updated each frame in stage_agc; serialized + cleared in
+ * audio_pipeline_get_lc_telemetry(). Instrumentation only - touches no lc_* value and no audio sample.
+ * Benign cross-task race (audio task writes, dfu servicer task reads) is acceptable for diagnostics. */
+typedef struct {
+    float gain_min;     /* min lc_gain over the window  -> ~0.022 means the far-end crush engaged */
+    float gain_now;     /* latest lc_gain */
+    float corr_now;     /* latest lc_corr_val (vs lc_corr_threshold 0.993) */
+    int   t_far_max;    /* max lc_t_far over the window (>0 => far-end detected) */
+    int   t_near_now;   /* latest lc_t_near (>0 => near/double-talk detected) */
+    float ref_pow_max;  /* max aec_ref_power over the window (far-end energy the AEC saw) */
+    float ref_pow_now;  /* latest aec_ref_power */
+} lc_tele_t;
+static lc_tele_t lc_tele = { 1.0f, 1.0f, 0.0f, 0, 0, 0.0f, 0.0f };
+
 static void *audio_pipeline_input_i(void *input_app_data)
 {
     frame_data_t *frame_data;
@@ -132,7 +147,48 @@ static void stage_agc(frame_data_t *frame_data)
             frame_data->samples[0],
             &agc_stage_state.md);
     memcpy(frame_data->samples, agc_output, appconfAUDIO_PIPELINE_FRAME_ADVANCE * sizeof(int32_t));
+
+    /* [LC-TELE dev.203] snapshot loss-control state into the peak-hold accumulator (diagnostics only;
+     * does not touch any sample or lc_* value). */
+    {
+        float g  = float_s32_to_float(agc_stage_state.state.lc_gain);
+        float cr = float_s32_to_float(agc_stage_state.state.lc_corr_val);
+        float rp = float_s32_to_float(agc_stage_state.md.aec_ref_power);
+        if (g < lc_tele.gain_min) { lc_tele.gain_min = g; }
+        lc_tele.gain_now = g;
+        lc_tele.corr_now = cr;
+        if (agc_stage_state.state.lc_t_far > lc_tele.t_far_max) { lc_tele.t_far_max = agc_stage_state.state.lc_t_far; }
+        lc_tele.t_near_now = agc_stage_state.state.lc_t_near;
+        if (rp > lc_tele.ref_pow_max) { lc_tele.ref_pow_max = rp; }
+        lc_tele.ref_pow_now = rp;
+    }
 #endif
+}
+
+/* [LC-TELE dev.203] Serialize the loss-control peak-hold snapshot (LC_TELE_NUM_BYTES, little-endian)
+ * and reset the per-window peaks. Called from the DFU servicer (tile 0) on a GET_LC_STATE poll. */
+void audio_pipeline_get_lc_telemetry(uint8_t *buf)
+{
+    uint16_t gain_min_milli = (uint16_t)(lc_tele.gain_min * 1000.0f + 0.5f);
+    uint16_t gain_now_milli = (uint16_t)(lc_tele.gain_now * 1000.0f + 0.5f);
+    uint16_t corr_now_milli = (uint16_t)(lc_tele.corr_now * 1000.0f + 0.5f);
+    uint16_t t_far_max      = (uint16_t)(lc_tele.t_far_max);
+    uint16_t t_near_now     = (uint16_t)(lc_tele.t_near_now);
+    float    ref_pow_max    = lc_tele.ref_pow_max;
+    float    ref_pow_now    = lc_tele.ref_pow_now;
+
+    buf[0]  = (uint8_t)(gain_min_milli & 0xFF); buf[1]  = (uint8_t)(gain_min_milli >> 8);
+    buf[2]  = (uint8_t)(gain_now_milli & 0xFF); buf[3]  = (uint8_t)(gain_now_milli >> 8);
+    buf[4]  = (uint8_t)(corr_now_milli & 0xFF); buf[5]  = (uint8_t)(corr_now_milli >> 8);
+    buf[6]  = (uint8_t)(t_far_max & 0xFF);      buf[7]  = (uint8_t)(t_far_max >> 8);
+    buf[8]  = (uint8_t)(t_near_now & 0xFF);     buf[9]  = (uint8_t)(t_near_now >> 8);
+    memcpy(&buf[10], &ref_pow_max, sizeof(float));
+    memcpy(&buf[14], &ref_pow_now, sizeof(float));
+
+    /* read-and-clear the peak-hold for the next window */
+    lc_tele.gain_min    = 1.0f;
+    lc_tele.t_far_max   = 0;
+    lc_tele.ref_pow_max = 0.0f;
 }
 
 static void initialize_pipeline_stages(void)

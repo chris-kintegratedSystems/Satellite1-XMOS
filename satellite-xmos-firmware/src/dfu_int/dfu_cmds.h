@@ -45,7 +45,10 @@ enum e_dfu_controller_servicer_resid_cmds
 #ifndef DFU_CONTROLLER_SERVICER_RESID_DFU_REBOOT
     DFU_CONTROLLER_SERVICER_RESID_DFU_REBOOT = 89,
 #endif
-    NUM_DFU_CONTROLLER_SERVICER_RESID_CMDS = 11
+#ifndef DFU_CONTROLLER_SERVICER_RESID_GET_LC_STATE
+    DFU_CONTROLLER_SERVICER_RESID_GET_LC_STATE = 90,   /* [LC-TELE dev.203] read XMOS loss-control state */
+#endif
+    NUM_DFU_CONTROLLER_SERVICER_RESID_CMDS = 12
 };
 
 // DFU_CONTROLLER_SERVICER_RESID number of elements
@@ -71,6 +74,8 @@ enum e_dfu_controller_servicer_resid_cmds
 #define DFU_CONTROLLER_SERVICER_RESID_DFU_GETVERSION_NUM_VALUES (5)
 // number of values of type dfu_controller_servicer_resid_dfu_reboot_t expected by DFU_CONTROLLER_SERVICER_RESID_DFU_REBOOT
 #define DFU_CONTROLLER_SERVICER_RESID_DFU_REBOOT_NUM_VALUES (1)
+// [LC-TELE dev.203] 18-byte LC telemetry blob (see audio_pipeline.h LC_TELE_NUM_BYTES); read-only
+#define DFU_CONTROLLER_SERVICER_RESID_GET_LC_STATE_NUM_VALUES (18)
 
 // DFU_CONTROLLER_SERVICER_RESID types
 // type expected by DFU_CONTROLLER_SERVICER_RESID_DFU_DETACH

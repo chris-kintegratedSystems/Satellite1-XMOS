@@ -141,7 +141,29 @@ static void initialize_pipeline_stages(void)
 
     ns_init(&ns_stage_state.state);
 
-    agc_init(&agc_stage_state.state, &AGC_PROFILE_ASR);
+    /* [LC-ECHO] Enable AGC Loss Control (LC) as the residual-echo suppressor. The shipping
+     * AGC_PROFILE_ASR has lc_enabled=0 (all lc_* zeroed) -> NO residual-echo suppression, so the
+     * speech-level echo leaks past the linear AEC. LC classifies each frame via aec_ref_power +
+     * aec_corr_factor (already supplied by stage_aec/stage_agc) and scales the mic output:
+     * far-end-only (our TTS echo) -> lc_gain_min (~-33dB, crushed below VAD); double-talk (real
+     * barge-in) -> lc_gain_double_talk (0.9, preserved). Reference lc_* values are the in-tree
+     * COMMS-derived set from modules/voice/test/lib_agc/test_process_frame/src/test_process_frame.h. */
+    agc_config_t agc_conf = AGC_PROFILE_ASR;
+    agc_conf.lc_enabled = 1;
+    agc_conf.lc_n_frame_far = 17;
+    agc_conf.lc_n_frame_near = 34;
+    agc_conf.lc_corr_threshold = f32_to_float_s32(0.993);
+    agc_conf.lc_bg_power_gamma = f32_to_float_s32(1.002);
+    agc_conf.lc_gamma_inc = f32_to_float_s32(1.005);
+    agc_conf.lc_gamma_dec = f32_to_float_s32(0.995);
+    agc_conf.lc_far_delta = f32_to_float_s32(300);
+    agc_conf.lc_near_delta = f32_to_float_s32(50);
+    agc_conf.lc_near_delta_far_active = f32_to_float_s32(100);
+    agc_conf.lc_gain_max = f32_to_float_s32(1);
+    agc_conf.lc_gain_double_talk = f32_to_float_s32(0.9);
+    agc_conf.lc_gain_silence = f32_to_float_s32(0.1);
+    agc_conf.lc_gain_min = f32_to_float_s32(0.022387);
+    agc_init(&agc_stage_state.state, &agc_conf);
     agc_stage_state.md.aec_ref_power = AGC_META_DATA_NO_AEC;
     agc_stage_state.md.aec_corr_factor = AGC_META_DATA_NO_AEC;
 }

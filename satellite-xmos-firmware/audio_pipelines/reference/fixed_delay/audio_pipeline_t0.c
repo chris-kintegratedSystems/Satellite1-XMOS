@@ -236,7 +236,7 @@ static void initialize_pipeline_stages(void)
     agc_conf.lc_gamma_dec = f32_to_float_s32(0.995);
     agc_conf.lc_far_delta = f32_to_float_s32(300);
     agc_conf.lc_near_delta = f32_to_float_s32(50);
-    agc_conf.lc_near_delta_far_active = f32_to_float_s32(100);
+    agc_conf.lc_near_delta_far_active = f32_to_float_s32(1500);   /* [dev.205 P4A] 100->1500: raise the far-active near-power bar above the echo onset peak (~370x bg) but well below real barge-in (5000-17000x) so the far-only crush engages THROUGH reply onset without losing barge-in protection */
     agc_conf.lc_gain_max = f32_to_float_s32(1);
     agc_conf.lc_gain_double_talk = f32_to_float_s32(0.9);
     agc_conf.lc_gain_silence = f32_to_float_s32(0.1);
